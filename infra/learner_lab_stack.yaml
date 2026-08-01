@@ -1,0 +1,218 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: SolarPulse Learner Lab stack with S3, Kinesis, Lambda raw archiver, and a Spark EC2 host.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: solarpulse
+  KeyName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: Existing EC2 key pair for SSH access.
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC where the Spark host should run.
+  PublicSubnetId:
+    Type: AWS::EC2::Subnet::Id
+    Description: Public subnet for the Spark host.
+  AllowedSshCidr:
+    Type: String
+    Default: 0.0.0.0/0
+    Description: CIDR allowed to SSH to the Spark host.
+  InstanceType:
+    Type: String
+    Default: t3.large
+    AllowedValues:
+      - t3.medium
+      - t3.large
+      - t3.xlarge
+      - m5.large
+      - m5.xlarge
+
+Resources:
+  SolarPulseBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${ProjectName}-${AWS::AccountId}-${AWS::Region}"
+
+  SolarPulseStream:
+    Type: AWS::Kinesis::Stream
+    Properties:
+      Name: !Sub "${ProjectName}-stream"
+      ShardCount: 1
+      RetentionPeriodHours: 24
+
+  RawArchiverRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: SolarPulseRawArchiverPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                Resource: !Sub "${SolarPulseBucket.Arn}/raw/*"
+              - Effect: Allow
+                Action:
+                  - kinesis:DescribeStream
+                  - kinesis:DescribeStreamSummary
+                  - kinesis:GetRecords
+                  - kinesis:GetShardIterator
+                  - kinesis:ListShards
+                  - kinesis:SubscribeToShard
+                Resource: !GetAtt SolarPulseStream.Arn
+
+  RawArchiverFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${ProjectName}-raw-archiver"
+      Runtime: python3.12
+      Handler: index.handler
+      Timeout: 60
+      MemorySize: 256
+      Role: !GetAtt RawArchiverRole.Arn
+      Environment:
+        Variables:
+          BUCKET_NAME: !Ref SolarPulseBucket
+          RAW_PREFIX: raw/kinesis
+      Code:
+        ZipFile: |
+          import base64
+          import json
+          import os
+          from datetime import datetime, timezone
+          import boto3
+
+          s3 = boto3.client("s3")
+          BUCKET_NAME = os.environ["BUCKET_NAME"]
+          RAW_PREFIX = os.environ.get("RAW_PREFIX", "raw/kinesis")
+
+          def handler(event, context):
+              lines = []
+              for record in event.get("Records", []):
+                  payload = base64.b64decode(record["kinesis"]["data"]).decode("utf-8")
+                  lines.append(payload)
+              if not lines:
+                  return {"written": 0}
+
+              timestamp = datetime.now(timezone.utc).strftime("%Y/%m/%d/%H/%M/%S")
+              key = f"{RAW_PREFIX}/{timestamp}-{context.aws_request_id}.jsonl"
+              s3.put_object(
+                  Bucket=BUCKET_NAME,
+                  Key=key,
+                  Body=("\n".join(lines) + "\n").encode("utf-8"),
+                  ContentType="application/x-ndjson",
+              )
+              return {"written": len(lines), "key": key}
+
+  RawArchiverEventSourceMapping:
+    Type: AWS::Lambda::EventSourceMapping
+    Properties:
+      BatchSize: 100
+      Enabled: true
+      EventSourceArn: !GetAtt SolarPulseStream.Arn
+      FunctionName: !Ref RawArchiverFunction
+      StartingPosition: LATEST
+
+  SparkHostRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Policies:
+        - PolicyName: SolarPulseSparkHostPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:ListBucket
+                Resource:
+                  - !GetAtt SolarPulseBucket.Arn
+                  - !Sub "${SolarPulseBucket.Arn}/*"
+              - Effect: Allow
+                Action:
+                  - kinesis:DescribeStream
+                  - kinesis:DescribeStreamSummary
+                  - kinesis:GetRecords
+                  - kinesis:GetShardIterator
+                  - kinesis:ListShards
+                  - kinesis:ListStreams
+                  - kinesis:PutRecord
+                  - kinesis:PutRecords
+                  - kinesis:SubscribeToShard
+                Resource: !GetAtt SolarPulseStream.Arn
+
+  SparkHostInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref SparkHostRole
+
+  SparkHostSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: SSH access for SolarPulse Spark host
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: !Ref AllowedSshCidr
+
+  SparkHost:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Sub "{{resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64}}"
+      InstanceType: !Ref InstanceType
+      IamInstanceProfile: !Ref SparkHostInstanceProfile
+      KeyName: !Ref KeyName
+      SecurityGroupIds:
+        - !Ref SparkHostSecurityGroup
+      SubnetId: !Ref PublicSubnetId
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-spark-host"
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -euxo pipefail
+          dnf update -y
+          dnf install -y java-17-amazon-corretto python3 python3-pip git unzip jq
+          pip3 install --upgrade pip
+          pip3 install boto3 pyspark pandas pyarrow streamlit plotly s3fs
+          mkdir -p /opt/solarpulse /var/log/solarpulse
+          cat <<'EOF' >/etc/profile.d/solarpulse.sh
+          export AWS_DEFAULT_REGION=${AWS::Region}
+          export SOLARPULSE_BUCKET=${SolarPulseBucket}
+          export SOLARPULSE_STREAM=${SolarPulseStream}
+          EOF
+
+Outputs:
+  DataBucketName:
+    Value: !Ref SolarPulseBucket
+  KinesisStreamName:
+    Value: !Ref SolarPulseStream
+  SparkHostInstanceId:
+    Value: !Ref SparkHost
+  SparkHostPublicIp:
+    Value: !GetAtt SparkHost.PublicIp

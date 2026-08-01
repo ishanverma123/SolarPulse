@@ -2,13 +2,21 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 
 import boto3
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import avg, col, count
 
-from batch_utils import add_disturbance_score, add_time_columns, build_summary, clean_dataset, validate_columns
+BATCH_DIR = Path(__file__).resolve().parent
+if str(BATCH_DIR) not in sys.path:
+    sys.path.insert(0, str(BATCH_DIR))
+
+try:
+    from batch_utils import add_disturbance_score, add_time_columns, build_summary, clean_dataset, validate_columns
+except ModuleNotFoundError:  # pragma: no cover - compatibility fallback for direct module execution
+    from batch.batch_utils import add_disturbance_score, add_time_columns, build_summary, clean_dataset, validate_columns
 
 
 def parse_args() -> argparse.Namespace:

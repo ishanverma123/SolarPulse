@@ -4,27 +4,17 @@ SolarPulse is an AWS-ready Lambda Architecture project for space-weather analyti
 
 ## AWS Architecture
 
-```text
-Historical NOAA CSV
-        |
-        +--> Python Producer ------------------------------+
-        |                                                  |
-        v                                                  v
-   S3 historical/                                  Kinesis Data Streams
-                                                           |
-                                                           +--> Lambda raw archiver --> S3 raw/kinesis/
-                                                           |
-                                                           +--> Spark speed layer --> S3 speed/
-                                                                 |
-S3 raw/kinesis/ --> Spark batch layer --> S3 batch/             |
-                 \_______________________________________________/
-                                 |
-                                 v
-                         Serving merge layer
-                                 |
-                                 v
-                       Streamlit dashboard / report
-```
+![SolarPulse Architecture Diagram](docs/architecture.svg)
+
+### End-to-End Flow
+
+1. Historical weather data is ingested into the system through the producer.
+2. Real-time records are published to Kinesis.
+3. The Lambda raw archiver stores raw stream data in S3.
+4. The Spark batch layer reads from S3-backed historical data and creates analytics outputs in S3.
+5. The speed layer processes streaming events and writes near-real-time artifacts.
+6. The serving layer merges the batch and speed outputs for the dashboard.
+7. The Streamlit dashboard presents the final analytics and operational status.
 
 ## Learner Lab Strategy
 

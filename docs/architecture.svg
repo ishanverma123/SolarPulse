@@ -1,0 +1,75 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="760" viewBox="0 0 1400 760">
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#3b82f6" />
+    </marker>
+    <style>
+      .title { font: 700 26px Arial, sans-serif; fill: #0f172a; }
+      .subtitle { font: 500 14px Arial, sans-serif; fill: #475569; }
+      .box { fill: #eff6ff; stroke: #2563eb; stroke-width: 2; rx: 18; }
+      .cloud { fill: #f8fafc; stroke: #64748b; stroke-width: 2; rx: 18; }
+      .label { font: 700 15px Arial, sans-serif; fill: #0f172a; }
+      .small { font: 500 12px Arial, sans-serif; fill: #334155; }
+      .arrowline { stroke: #3b82f6; stroke-width: 3; fill: none; marker-end: url(#arrow); }
+    </style>
+  </defs>
+
+  <rect x="0" y="0" width="1400" height="760" fill="#ffffff" />
+  <text x="700" y="48" text-anchor="middle" class="title">SolarPulse Architecture</text>
+  <text x="700" y="72" text-anchor="middle" class="subtitle">AWS Lambda Architecture for batch, speed, serving, and dashboard analytics</text>
+
+  <rect x="70" y="130" width="210" height="110" class="box" />
+  <text x="175" y="175" text-anchor="middle" class="label">Historical NOAA CSV</text>
+  <text x="175" y="198" text-anchor="middle" class="small">Input data source</text>
+
+  <rect x="340" y="130" width="210" height="110" class="box" />
+  <text x="445" y="175" text-anchor="middle" class="label">Producer</text>
+  <text x="445" y="198" text-anchor="middle" class="small">Publishes records</text>
+
+  <rect x="610" y="130" width="250" height="110" class="box" />
+  <text x="735" y="175" text-anchor="middle" class="label">Kinesis Data Stream</text>
+  <text x="735" y="198" text-anchor="middle" class="small">Real-time ingestion</text>
+
+  <rect x="930" y="130" width="230" height="110" class="box" />
+  <text x="1045" y="175" text-anchor="middle" class="label">Lambda Raw Archiver</text>
+  <text x="1045" y="198" text-anchor="middle" class="small">Writes raw events to S3</text>
+
+  <rect x="930" y="335" width="230" height="110" class="box" />
+  <text x="1045" y="380" text-anchor="middle" class="label">Spark Batch Layer</text>
+  <text x="1045" y="403" text-anchor="middle" class="small">Analytics + summaries</text>
+
+  <rect x="930" y="520" width="230" height="110" class="box" />
+  <text x="1045" y="565" text-anchor="middle" class="label">Spark Speed Layer</text>
+  <text x="1045" y="588" text-anchor="middle" class="small">Near-real-time stream processing</text>
+
+  <rect x="610" y="520" width="250" height="110" class="cloud" />
+  <text x="735" y="565" text-anchor="middle" class="label">S3 Outputs</text>
+  <text x="735" y="588" text-anchor="middle" class="small">batch / speed / checkpoints</text>
+
+  <rect x="325" y="520" width="220" height="110" class="box" />
+  <text x="435" y="565" text-anchor="middle" class="label">Serving Merge Layer</text>
+  <text x="435" y="588" text-anchor="middle" class="small">Combines outputs</text>
+
+  <rect x="70" y="520" width="210" height="110" class="box" />
+  <text x="175" y="565" text-anchor="middle" class="label">Streamlit Dashboard</text>
+  <text x="175" y="588" text-anchor="middle" class="small">Operational UI</text>
+
+  <line x1="280" y1="185" x2="340" y2="185" class="arrowline" />
+  <line x1="550" y1="185" x2="610" y2="185" class="arrowline" />
+  <line x1="860" y1="185" x2="930" y2="185" class="arrowline" />
+  <line x1="1045" y1="240" x2="1045" y2="335" class="arrowline" />
+  <line x1="1045" y1="445" x2="1045" y2="520" class="arrowline" />
+  <line x1="930" y1="390" x2="860" y2="390" class="arrowline" />
+  <line x1="610" y1="575" x2="545" y2="575" class="arrowline" />
+  <line x1="325" y1="575" x2="280" y2="575" class="arrowline" />
+  <line x1="735" y1="630" x2="735" y2="680" class="arrowline" />
+  <line x1="735" y1="680" x2="435" y2="680" class="arrowline" />
+  <line x1="435" y1="630" x2="435" y2="680" class="arrowline" />
+  <line x1="435" y1="520" x2="435" y2="470" class="arrowline" />
+  <line x1="545" y1="575" x2="610" y2="575" class="arrowline" />
+  <line x1="735" y1="240" x2="735" y2="520" class="arrowline" />
+  <line x1="610" y1="390" x2="545" y2="390" class="arrowline" />
+
+  <text x="1020" y="655" class="small">S3 batch outputs</text>
+  <text x="390" y="705" class="small">Dashboard queries merged results</text>
+</svg>

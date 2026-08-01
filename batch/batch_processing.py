@@ -20,7 +20,20 @@ def parse_args() -> argparse.Namespace:
 
 
 def create_spark_session(app_name: str) -> SparkSession:
-    return SparkSession.builder.appName(app_name).getOrCreate()
+    return (
+        SparkSession.builder.appName(app_name)
+        .config("spark.jars.packages", "org.apache.hadoop:hadoop-aws:3.4.1")
+        .config("spark.hadoop.fs.s3.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem")
+        .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem")
+        .config("spark.hadoop.fs.s3a.aws.credentials.provider", "com.amazonaws.auth.InstanceProfileCredentialsProvider")
+        .getOrCreate()
+    )
+
+
+def spark_uri(uri: str) -> str:
+    if uri.startswith("s3://"):
+        return uri.replace("s3://", "s3a://", 1)
+    return uri
 
 
 def split_s3_uri(uri: str) -> tuple[str, str]:
@@ -49,9 +62,11 @@ def write_json(base_output: str, relative_name: str, payload: dict) -> None:
 def main() -> None:
     args = parse_args()
     spark = create_spark_session(args.app_name)
+    input_uri = spark_uri(args.input)
+    output_uri = spark_uri(args.output)
 
     try:
-        df = spark.read.csv(args.input, header=True, inferSchema=True)
+        df = spark.read.csv(input_uri, header=True, inferSchema=True)
         validate_columns(df)
 
         df = clean_dataset(df)
@@ -116,11 +131,11 @@ def main() -> None:
         }
         summary = build_summary(df)
 
-        daily_speed.write.mode("overwrite").parquet(f"{args.output}/daily_speed")
-        monthly_speed.write.mode("overwrite").parquet(f"{args.output}/monthly_speed")
-        hourly_speed.write.mode("overwrite").parquet(f"{args.output}/hourly_speed")
-        storm_events.write.mode("overwrite").parquet(f"{args.output}/storm_events")
-        disturbance_breakdown.write.mode("overwrite").parquet(f"{args.output}/disturbance_breakdown")
+        daily_speed.write.mode("overwrite").parquet(f"{output_uri}/daily_speed")
+        monthly_speed.write.mode("overwrite").parquet(f"{output_uri}/monthly_speed")
+        hourly_speed.write.mode("overwrite").parquet(f"{output_uri}/hourly_speed")
+        storm_events.write.mode("overwrite").parquet(f"{output_uri}/storm_events")
+        disturbance_breakdown.write.mode("overwrite").parquet(f"{output_uri}/disturbance_breakdown")
 
         write_json(args.output, "summary.json", summary)
         write_json(args.output, "percentiles.json", percentiles)

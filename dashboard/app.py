@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import json
+import tempfile
 from pathlib import Path
 
 import pandas as pd
 import plotly.express as px
 import streamlit as st
 import boto3
+import pyarrow.parquet as pq
 
 
 st.set_page_config(page_title="SolarPulse", layout="wide")
@@ -37,7 +39,29 @@ def load_json(uri: str, relative_name: str) -> dict:
 
 
 def load_daily_df(uri: str) -> pd.DataFrame | None:
-    target = f"{uri.rstrip('/')}/daily_speed" if is_s3_uri(uri) else str(Path(uri) / "daily_speed")
+    if is_s3_uri(uri):
+        bucket, prefix = split_s3_uri(uri)
+        base_prefix = f"{prefix}/daily_speed/" if prefix else "daily_speed/"
+        s3 = boto3.client("s3")
+        response = s3.list_objects_v2(Bucket=bucket, Prefix=base_prefix)
+        keys = [
+            item["Key"]
+            for item in response.get("Contents", [])
+            if item["Key"].endswith(".parquet")
+        ]
+        if not keys:
+            return None
+
+        tables = []
+        for key in keys:
+            with tempfile.NamedTemporaryFile(suffix=".parquet") as temp_file:
+                s3.download_file(bucket, key, temp_file.name)
+                tables.append(pq.read_table(temp_file.name))
+        if not tables:
+            return None
+        return pd.concat([table.to_pandas() for table in tables], ignore_index=True)
+
+    target = Path(uri) / "daily_speed"
     try:
         return pd.read_parquet(target)
     except FileNotFoundError:

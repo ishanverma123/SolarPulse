@@ -27,6 +27,12 @@ Parameters:
       - t3.xlarge
       - m5.large
       - m5.xlarge
+  ExistingLambdaRoleArn:
+    Type: String
+    Description: Existing IAM role ARN for the Lambda raw archiver, for example arn:aws:iam::123456789012:role/LabRole.
+  ExistingInstanceProfileName:
+    Type: String
+    Description: Existing EC2 instance profile name available in the Learner Lab account, for example LabInstanceProfile.
 
 Resources:
   SolarPulseBucket:
@@ -41,37 +47,6 @@ Resources:
       ShardCount: 1
       RetentionPeriodHours: 24
 
-  RawArchiverRole:
-    Type: AWS::IAM::Role
-    Properties:
-      AssumeRolePolicyDocument:
-        Version: "2012-10-17"
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: lambda.amazonaws.com
-            Action: sts:AssumeRole
-      ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
-      Policies:
-        - PolicyName: SolarPulseRawArchiverPolicy
-          PolicyDocument:
-            Version: "2012-10-17"
-            Statement:
-              - Effect: Allow
-                Action:
-                  - s3:PutObject
-                Resource: !Sub "${SolarPulseBucket.Arn}/raw/*"
-              - Effect: Allow
-                Action:
-                  - kinesis:DescribeStream
-                  - kinesis:DescribeStreamSummary
-                  - kinesis:GetRecords
-                  - kinesis:GetShardIterator
-                  - kinesis:ListShards
-                  - kinesis:SubscribeToShard
-                Resource: !GetAtt SolarPulseStream.Arn
-
   RawArchiverFunction:
     Type: AWS::Lambda::Function
     Properties:
@@ -80,7 +55,7 @@ Resources:
       Handler: index.handler
       Timeout: 60
       MemorySize: 256
-      Role: !GetAtt RawArchiverRole.Arn
+      Role: !Ref ExistingLambdaRoleArn
       Environment:
         Variables:
           BUCKET_NAME: !Ref SolarPulseBucket
@@ -124,50 +99,6 @@ Resources:
       FunctionName: !Ref RawArchiverFunction
       StartingPosition: LATEST
 
-  SparkHostRole:
-    Type: AWS::IAM::Role
-    Properties:
-      AssumeRolePolicyDocument:
-        Version: "2012-10-17"
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: ec2.amazonaws.com
-            Action: sts:AssumeRole
-      ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
-      Policies:
-        - PolicyName: SolarPulseSparkHostPolicy
-          PolicyDocument:
-            Version: "2012-10-17"
-            Statement:
-              - Effect: Allow
-                Action:
-                  - s3:GetObject
-                  - s3:PutObject
-                  - s3:ListBucket
-                Resource:
-                  - !GetAtt SolarPulseBucket.Arn
-                  - !Sub "${SolarPulseBucket.Arn}/*"
-              - Effect: Allow
-                Action:
-                  - kinesis:DescribeStream
-                  - kinesis:DescribeStreamSummary
-                  - kinesis:GetRecords
-                  - kinesis:GetShardIterator
-                  - kinesis:ListShards
-                  - kinesis:ListStreams
-                  - kinesis:PutRecord
-                  - kinesis:PutRecords
-                  - kinesis:SubscribeToShard
-                Resource: !GetAtt SolarPulseStream.Arn
-
-  SparkHostInstanceProfile:
-    Type: AWS::IAM::InstanceProfile
-    Properties:
-      Roles:
-        - !Ref SparkHostRole
-
   SparkHostSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
@@ -184,7 +115,7 @@ Resources:
     Properties:
       ImageId: !Sub "{{resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64}}"
       InstanceType: !Ref InstanceType
-      IamInstanceProfile: !Ref SparkHostInstanceProfile
+      IamInstanceProfile: !Ref ExistingInstanceProfileName
       KeyName: !Ref KeyName
       SecurityGroupIds:
         - !Ref SparkHostSecurityGroup

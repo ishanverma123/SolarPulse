@@ -31,8 +31,14 @@ aws cloudformation deploy \
     ExistingLambdaRoleArn="${LAMBDA_ROLE_ARN}" \
     ExistingInstanceProfileName="${INSTANCE_PROFILE_NAME}"
 
-aws cloudformation describe-stacks \
+if OUTPUTS=$(aws cloudformation describe-stacks \
   --region "${REGION}" \
   --stack-name "${STACK_NAME}" \
-  --query 'Stacks[0].Outputs'
+  --query 'Stacks[0].Outputs' 2>/dev/null); then
+  echo "${OUTPUTS}"
+else
+  echo "Stack deployment command completed, but your current identity cannot call DescribeStacks."
+  echo "You can still continue by using the AWS console or by checking the EC2 instance public IP from the stack output in your lab environment."
+fi
+
 echo "Stack deployed. Next: sync this project to the Spark host and run producer/batch/speed jobs."

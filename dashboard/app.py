@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -15,7 +17,9 @@ import pyarrow.parquet as pq
 st.set_page_config(page_title="SolarPulse", layout="wide")
 st.title("SolarPulse Dashboard")
 
-DEFAULT_OUTPUT_URI = str(Path(__file__).resolve().parents[1] / "output")
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_OUTPUT_URI = str(PROJECT_ROOT / "output")
+DEFAULT_INPUT_URI = str(PROJECT_ROOT / "data" / "historical_space_weather.csv")
 
 
 def get_output_uri() -> str:
@@ -29,7 +33,74 @@ def get_output_uri() -> str:
         return DEFAULT_OUTPUT_URI
 
 
+def get_input_uri() -> str:
+    env_uri = os.getenv("SOLARPULSE_INPUT_URI")
+    if env_uri:
+        return env_uri
+
+    try:
+        return st.secrets.get("input_uri", DEFAULT_INPUT_URI)
+    except Exception:
+        return DEFAULT_INPUT_URI
+
+
+def run_command(command: list[str]) -> tuple[bool, str]:
+    completed = subprocess.run(
+        command,
+        cwd=PROJECT_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    combined = "\n".join(part for part in [completed.stdout, completed.stderr] if part)
+    return completed.returncode == 0, combined.strip()
+
+
 output_uri = st.sidebar.text_input("Output path", value=get_output_uri())
+input_uri = st.sidebar.text_input("Input path", value=get_input_uri())
+
+with st.sidebar:
+    st.subheader("Pipeline automation")
+    batch_run_clicked = st.button("Run batch layer")
+    speed_run_clicked = st.button("Run speed replay")
+
+    if batch_run_clicked:
+        with st.spinner("Running batch layer…"):
+            batch_ok, batch_output = run_command(
+                [
+                    sys.executable,
+                    "batch/batch_processing.py",
+                    "--input",
+                    input_uri,
+                    "--output",
+                    output_uri,
+                ]
+            )
+        if batch_ok:
+            st.success("Batch layer completed successfully.")
+        else:
+            st.error("Batch layer failed.")
+        st.code(batch_output or "No batch output captured.")
+
+    if speed_run_clicked:
+        with st.spinner("Running speed replay…"):
+            speed_ok, speed_output = run_command(
+                [
+                    sys.executable,
+                    "speed/streaming.py",
+                    "--input",
+                    input_uri,
+                    "--window-size",
+                    "5",
+                    "--mode",
+                    "csv",
+                ]
+            )
+        if speed_ok:
+            st.success("Speed replay completed successfully.")
+        else:
+            st.error("Speed replay failed.")
+        st.code(speed_output or "No speed output captured.")
 
 
 def is_s3_uri(value: str) -> bool:
@@ -114,7 +185,7 @@ else:
     summary_exists = (Path(output_uri) / "summary.json").exists()
 
 if not summary_exists:
-    st.info("Run the batch layer first so the dashboard has data to display.")
+    st.info("Batch output was not found. Use the sidebar controls to run the pipeline from the dashboard itself.")
     st.stop()
 
 summary = load_json(output_uri, "summary.json")

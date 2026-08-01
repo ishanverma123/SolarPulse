@@ -102,12 +102,16 @@ Resources:
   SparkHostSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: SSH access for SolarPulse Spark host
+      GroupDescription: SSH and dashboard access for SolarPulse Spark host
       VpcId: !Ref VpcId
       SecurityGroupIngress:
         - IpProtocol: tcp
           FromPort: 22
           ToPort: 22
+          CidrIp: !Ref AllowedSshCidr
+        - IpProtocol: tcp
+          FromPort: 8501
+          ToPort: 8501
           CidrIp: !Ref AllowedSshCidr
 
   SparkHost:
@@ -136,7 +140,20 @@ Resources:
           export AWS_DEFAULT_REGION=${AWS::Region}
           export SOLARPULSE_BUCKET=${SolarPulseBucket}
           export SOLARPULSE_STREAM=${SolarPulseStream}
+          export SOLARPULSE_OUTPUT_URI="s3://${SolarPulseBucket}/batch"
           EOF
+          cat <<'EOF' >/opt/solarpulse/start_dashboard.sh
+          #!/bin/bash
+          set -euo pipefail
+          export AWS_DEFAULT_REGION=${AWS::Region}
+          export SOLARPULSE_BUCKET=${SolarPulseBucket}
+          export SOLARPULSE_STREAM=${SolarPulseStream}
+          export SOLARPULSE_OUTPUT_URI="s3://${SolarPulseBucket}/batch"
+          cd /opt/solarpulse
+          nohup python3 -m streamlit run dashboard/app.py --server.address 0.0.0.0 --server.port 8501 --browser.gatherUsageStats false >/var/log/solarpulse/dashboard.log 2>&1 &
+          EOF
+          chmod +x /opt/solarpulse/start_dashboard.sh
+          /opt/solarpulse/start_dashboard.sh
 
 Outputs:
   DataBucketName:

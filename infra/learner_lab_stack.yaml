@@ -1,23 +1,28 @@
 AWSTemplateFormatVersion: "2010-09-09"
-Description: SolarPulse Learner Lab stack with S3, Kinesis, Lambda raw archiver, and a Spark EC2 host.
+Description: SolarPulse Learner Lab stack with S3, Kinesis, Lambda raw archiver, and an auto-scaled Spark EC2 host.
 
 Parameters:
   ProjectName:
     Type: String
     Default: solarpulse
+
   KeyName:
     Type: AWS::EC2::KeyPair::KeyName
     Description: Existing EC2 key pair for SSH access.
+
   VpcId:
     Type: AWS::EC2::VPC::Id
-    Description: VPC where the Spark host should run.
+    Description: VPC where the Spark hosts should run.
+
   PublicSubnetId:
     Type: AWS::EC2::Subnet::Id
-    Description: Public subnet for the Spark host.
+    Description: Public subnet for the Spark hosts.
+
   AllowedSshCidr:
     Type: String
     Default: 0.0.0.0/0
-    Description: CIDR allowed to SSH to the Spark host.
+    Description: CIDR allowed to access SSH and the Streamlit dashboard.
+
   InstanceType:
     Type: String
     Default: t3.large
@@ -27,12 +32,14 @@ Parameters:
       - t3.xlarge
       - m5.large
       - m5.xlarge
+
   ExistingLambdaRoleArn:
     Type: String
-    Description: Existing IAM role ARN for the Lambda raw archiver, for example arn:aws:iam::123456789012:role/LabRole.
+    Description: Existing IAM role ARN for the Lambda raw archiver.
+
   ExistingInstanceProfileName:
     Type: String
-    Description: Existing EC2 instance profile name available in the Learner Lab account, for example LabInstanceProfile.
+    Description: Existing EC2 instance profile name available in the Learner Lab account.
 
 Resources:
   SolarPulseBucket:
@@ -63,7 +70,6 @@ Resources:
       Code:
         ZipFile: |
           import base64
-          import json
           import os
           from datetime import datetime, timezone
           import boto3
@@ -75,13 +81,19 @@ Resources:
           def handler(event, context):
               lines = []
               for record in event.get("Records", []):
-                  payload = base64.b64decode(record["kinesis"]["data"]).decode("utf-8")
+                  payload = base64.b64decode(
+                      record["kinesis"]["data"]
+                  ).decode("utf-8")
                   lines.append(payload)
+
               if not lines:
                   return {"written": 0}
 
-              timestamp = datetime.now(timezone.utc).strftime("%Y/%m/%d/%H/%M/%S")
+              timestamp = datetime.now(timezone.utc).strftime(
+                  "%Y/%m/%d/%H/%M/%S"
+              )
               key = f"{RAW_PREFIX}/{timestamp}-{context.aws_request_id}.jsonl"
+
               s3.put_object(
                   Bucket=BUCKET_NAME,
                   Key=key,
@@ -102,7 +114,7 @@ Resources:
   SparkHostSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: SSH and dashboard access for SolarPulse Spark host
+      GroupDescription: SSH and dashboard access for SolarPulse Spark hosts
       VpcId: !Ref VpcId
       SecurityGroupIngress:
         - IpProtocol: tcp
@@ -114,55 +126,84 @@ Resources:
           ToPort: 8501
           CidrIp: !Ref AllowedSshCidr
 
-  SparkHostLaunchConfiguration:
-    Type: AWS::AutoScaling::LaunchConfiguration
+  SparkHostLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
     Properties:
-      ImageId: !Sub "{{resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64}}"
-      InstanceType: !Ref InstanceType
-      IamInstanceProfile: !Ref ExistingInstanceProfileName
-      KeyName: !Ref KeyName
-      SecurityGroups:
-        - !Ref SparkHostSecurityGroup
-      AssociatePublicIpAddress: true
-      UserData:
-        Fn::Base64: !Sub |
-          #!/bin/bash
-          set -euxo pipefail
-          dnf update -y
-          dnf install -y java-17-amazon-corretto python3 python3-pip git unzip jq
-          pip3 install --upgrade pip
-          pip3 install boto3 pyspark pandas pyarrow streamlit plotly s3fs
-          mkdir -p /opt/solarpulse /var/log/solarpulse
-          cat <<'EOF' >/etc/profile.d/solarpulse.sh
-          export AWS_DEFAULT_REGION=${AWS::Region}
-          export SOLARPULSE_BUCKET=${SolarPulseBucket}
-          export SOLARPULSE_STREAM=${SolarPulseStream}
-          export SOLARPULSE_OUTPUT_URI="s3://${SolarPulseBucket}/batch"
-          EOF
-          cat <<'EOF' >/opt/solarpulse/start_dashboard.sh
-          #!/bin/bash
-          set -euo pipefail
-          export AWS_DEFAULT_REGION=${AWS::Region}
-          export SOLARPULSE_BUCKET=${SolarPulseBucket}
-          export SOLARPULSE_STREAM=${SolarPulseStream}
-          export SOLARPULSE_OUTPUT_URI="s3://${SolarPulseBucket}/batch"
-          cd /opt/solarpulse
-          nohup python3 -m streamlit run dashboard/app.py --server.address 0.0.0.0 --server.port 8501 --browser.gatherUsageStats false >/var/log/solarpulse/dashboard.log 2>&1 &
-          EOF
-          chmod +x /opt/solarpulse/start_dashboard.sh
-          /opt/solarpulse/start_dashboard.sh
+      LaunchTemplateName: !Sub "${ProjectName}-spark-host-template"
+      LaunchTemplateData:
+        ImageId: !Sub "{{resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64}}"
+        InstanceType: !Ref InstanceType
+        KeyName: !Ref KeyName
+        IamInstanceProfile:
+          Name: !Ref ExistingInstanceProfileName
+        Monitoring:
+          Enabled: true
+        NetworkInterfaces:
+          - DeviceIndex: 0
+            AssociatePublicIpAddress: true
+            Groups:
+              - !Ref SparkHostSecurityGroup
+        UserData:
+          Fn::Base64: !Sub |
+            #!/bin/bash
+            set -euxo pipefail
+
+            dnf update -y
+            dnf install -y java-17-amazon-corretto python3 python3-pip git unzip jq rsync
+
+            pip3 install --upgrade pip
+            pip3 install boto3 pyspark pandas pyarrow streamlit plotly s3fs
+
+            mkdir -p /opt/solarpulse
+            mkdir -p /var/log/solarpulse
+
+            cat <<'EOF' >/etc/profile.d/solarpulse.sh
+            export AWS_DEFAULT_REGION=${AWS::Region}
+            export SOLARPULSE_BUCKET=${SolarPulseBucket}
+            export SOLARPULSE_STREAM=${SolarPulseStream}
+            export SOLARPULSE_OUTPUT_URI="s3://${SolarPulseBucket}/batch"
+            EOF
+
+            cat <<'EOF' >/opt/solarpulse/start_dashboard.sh
+            #!/bin/bash
+            set -euo pipefail
+
+            export AWS_DEFAULT_REGION=${AWS::Region}
+            export SOLARPULSE_BUCKET=${SolarPulseBucket}
+            export SOLARPULSE_STREAM=${SolarPulseStream}
+            export SOLARPULSE_OUTPUT_URI="s3://${SolarPulseBucket}/batch"
+
+            cd /opt/solarpulse
+
+            if [ ! -f dashboard/app.py ]; then
+              echo "SolarPulse project has not been synced yet."
+              exit 0
+            fi
+
+            nohup python3 -m streamlit run dashboard/app.py \
+              --server.address 0.0.0.0 \
+              --server.port 8501 \
+              --browser.gatherUsageStats false \
+              >/var/log/solarpulse/dashboard.log 2>&1 &
+            EOF
+
+            chmod +x /opt/solarpulse/start_dashboard.sh
 
   SparkHostAutoScalingGroup:
     Type: AWS::AutoScaling::AutoScalingGroup
     Properties:
+      AutoScalingGroupName: !Sub "${ProjectName}-spark-host"
       VPCZoneIdentifier:
         - !Ref PublicSubnetId
-      LaunchConfigurationName: !Ref SparkHostLaunchConfiguration
-      MinSize: 1
-      MaxSize: 3
-      DesiredCapacity: 1
+      LaunchTemplate:
+        LaunchTemplateId: !Ref SparkHostLaunchTemplate
+        Version: !GetAtt SparkHostLaunchTemplate.LatestVersionNumber
+      MinSize: "1"
+      MaxSize: "3"
+      DesiredCapacity: "1"
       HealthCheckType: EC2
       HealthCheckGracePeriod: 300
+      DefaultInstanceWarmup: 300
       Tags:
         - Key: Name
           Value: !Sub "${ProjectName}-spark-host"
@@ -173,17 +214,26 @@ Resources:
     Properties:
       AutoScalingGroupName: !Ref SparkHostAutoScalingGroup
       PolicyType: TargetTrackingScaling
+      EstimatedInstanceWarmup: 300
       TargetTrackingConfiguration:
         PredefinedMetricSpecification:
           PredefinedMetricType: ASGAverageCPUUtilization
         TargetValue: 60.0
         DisableScaleIn: false
-      Cooldown: 300
 
 Outputs:
   DataBucketName:
+    Description: S3 bucket used by SolarPulse.
     Value: !Ref SolarPulseBucket
+
   KinesisStreamName:
+    Description: Kinesis stream used for SolarPulse ingestion.
     Value: !Ref SolarPulseStream
+
+  SparkHostLaunchTemplateId:
+    Description: Launch template used by the Auto Scaling Group.
+    Value: !Ref SparkHostLaunchTemplate
+
   SparkHostAutoScalingGroupName:
+    Description: Auto Scaling Group used by the Spark processing tier.
     Value: !Ref SparkHostAutoScalingGroup

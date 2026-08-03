@@ -293,10 +293,10 @@ def load_json(uri: str, relative_name: str) -> dict:
         return json.load(handle)
 
 
-def load_daily_df(uri: str) -> pd.DataFrame | None:
+def load_parquet_prefix(uri: str, prefix_name: str) -> pd.DataFrame | None:
     if is_s3_uri(uri):
         bucket, prefix = split_s3_uri(uri)
-        base_prefix = f"{prefix}/daily_speed/" if prefix else "daily_speed/"
+        base_prefix = f"{prefix}/{prefix_name}/" if prefix else f"{prefix_name}/"
         s3 = boto3.client("s3")
         response = s3.list_objects_v2(Bucket=bucket, Prefix=base_prefix)
         keys = [
@@ -316,11 +316,19 @@ def load_daily_df(uri: str) -> pd.DataFrame | None:
             return None
         return pd.concat([table.to_pandas() for table in tables], ignore_index=True)
 
-    target = Path(uri) / "daily_speed"
+    target = Path(uri) / prefix_name
     try:
         return pd.read_parquet(target)
     except FileNotFoundError:
         return None
+
+
+def load_daily_df(uri: str) -> pd.DataFrame | None:
+    return load_parquet_prefix(uri, "daily_speed")
+
+
+def load_disturbance_breakdown(uri: str) -> pd.DataFrame | None:
+    return load_parquet_prefix(uri, "disturbance_breakdown")
 
 
 def load_latest_speed_snapshots(uri: str) -> pd.DataFrame | None:
@@ -366,54 +374,102 @@ source_col, sink_col = st.columns(2)
 source_col.info(f"Input source: {input_uri}")
 sink_col.info(f"Output target: {output_uri}")
 
-col1, col2, col3, col4 = st.columns(4)
-col1.metric("Records", summary["record_count"])
-col2.metric("Avg Speed", summary["avg_speed"])
-col3.metric("Max Speed", summary["max_speed"])
-col4.metric("Avg Disturbance", summary["avg_disturbance_score"])
+st.subheader("Lambda Architecture Overview")
+overview_cols = st.columns(6)
+overview_cols[0].metric("Records", summary["record_count"])
+overview_cols[1].metric("Avg Speed", summary["avg_speed"])
+overview_cols[2].metric("Max Speed", summary["max_speed"])
+overview_cols[3].metric("Min Speed", summary["min_speed"])
+overview_cols[4].metric("Avg Disturbance", summary["avg_disturbance_score"])
+overview_cols[5].metric("P95 Speed", percentiles["p95"])
 
-st.subheader("Historical Speed Percentiles")
-st.json(percentiles)
+with st.expander("Batch layer summary JSON", expanded=False):
+    st.json(summary)
 
-daily_df = load_daily_df(output_uri)
-if daily_df is not None and not daily_df.empty:
-    daily_df["date"] = pd.to_datetime(daily_df[["year", "month", "day"]])
-    fig = px.line(
-        daily_df,
-        x="date",
-        y="daily_avg_speed",
-        title="Daily Average Speed",
-        color_discrete_sequence=["#32d1ff"],
-    )
-    fig.update_layout(
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0)",
-        font={"color": "#eaf8ff"},
-        margin=dict(l=10, r=10, t=40, b=10),
-    )
-    st.plotly_chart(fig, use_container_width=True)
+with st.expander("Historical percentiles", expanded=True):
+    st.json(percentiles)
 
-speed_df = load_latest_speed_snapshots(output_uri)
-if speed_df is not None and not speed_df.empty:
-    st.subheader("Recent Speed Layer Snapshots")
-    latest = speed_df.iloc[-1]
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Current Speed", latest["current_speed"])
-    col2.metric("Rolling Avg Speed", latest["rolling_avg_speed"])
-    col3.metric("Risk Band", latest["risk_band"])
+batch_tabs = st.tabs(["Batch Trends", "Risk Breakdown", "Serving View"])
 
-    speed_df["time_tag"] = pd.to_datetime(speed_df["time_tag"])
-    live_fig = px.line(
-        speed_df,
-        x="time_tag",
-        y=["current_speed", "rolling_avg_speed"],
-        title="Live Speed vs Rolling Average",
-        color_discrete_sequence=["#6ee7ff", "#ffd166"],
-    )
-    live_fig.update_layout(
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0)",
-        font={"color": "#eaf8ff"},
-        margin=dict(l=10, r=10, t=40, b=10),
-    )
-    st.plotly_chart(live_fig, use_container_width=True)
+with batch_tabs[0]:
+    daily_df = load_daily_df(output_uri)
+    if daily_df is not None and not daily_df.empty:
+        daily_df["date"] = pd.to_datetime(daily_df[["year", "month", "day"]])
+        fig = px.line(
+            daily_df,
+            x="date",
+            y="daily_avg_speed",
+            title="Daily Average Speed (Batch Layer)",
+            color_discrete_sequence=["#32d1ff"],
+        )
+        fig.update_layout(
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            font={"color": "#eaf8ff"},
+            margin=dict(l=10, r=10, t=40, b=10),
+        )
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.warning("No daily batch parquet outputs were found yet.")
+
+with batch_tabs[1]:
+    breakdown_df = load_disturbance_breakdown(output_uri)
+    if breakdown_df is not None and not breakdown_df.empty:
+        breakdown_df = breakdown_df.sort_values("risk_band")
+        risk_fig = px.bar(
+            breakdown_df,
+            x="risk_band",
+            y="event_count",
+            title="Disturbance Risk Distribution",
+            color="risk_band",
+            color_discrete_map={
+                "baseline": "#59d98b",
+                "elevated": "#ffd166",
+                "high": "#ff9f43",
+                "extreme": "#ff5d73",
+            },
+        )
+        risk_fig.update_layout(
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            font={"color": "#eaf8ff"},
+            margin=dict(l=10, r=10, t=40, b=10),
+        )
+        st.plotly_chart(risk_fig, use_container_width=True)
+        st.dataframe(breakdown_df, use_container_width=True)
+    else:
+        st.warning("No disturbance breakdown parquet outputs were found yet.")
+
+with batch_tabs[2]:
+    speed_df = load_latest_speed_snapshots(output_uri)
+    if speed_df is not None and not speed_df.empty:
+        latest = speed_df.iloc[-1]
+        st.subheader("Serving View (Batch + Speed Merge)")
+        serve_cols = st.columns(4)
+        serve_cols[0].metric("Current Speed", latest["current_speed"])
+        serve_cols[1].metric("Rolling Avg Speed", latest["rolling_avg_speed"])
+        serve_cols[2].metric("Disturbance Score", latest["disturbance_score"])
+        serve_cols[3].metric("Risk Band", latest["risk_band"])
+
+        st.dataframe(
+            speed_df[["time_tag", "current_speed", "rolling_avg_speed", "disturbance_score", "risk_band"]].tail(10),
+            use_container_width=True,
+        )
+
+        speed_df["time_tag"] = pd.to_datetime(speed_df["time_tag"])
+        live_fig = px.line(
+            speed_df,
+            x="time_tag",
+            y=["current_speed", "rolling_avg_speed"],
+            title="Live Speed vs Rolling Average",
+            color_discrete_sequence=["#6ee7ff", "#ffd166"],
+        )
+        live_fig.update_layout(
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            font={"color": "#eaf8ff"},
+            margin=dict(l=10, r=10, t=40, b=10),
+        )
+        st.plotly_chart(live_fig, use_container_width=True)
+    else:
+        st.warning("No speed-layer snapshots were found yet. Run the speed replay or Kinesis path first.")

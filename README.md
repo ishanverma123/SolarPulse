@@ -136,15 +136,41 @@ aws s3 cp data/historical_space_weather.csv s3://<bucket-name>/historical/histor
 
 ### 5. Start the producer into Kinesis
 
-You can run this locally if your AWS CLI credentials are active, or on the Spark host:
+You can run this locally if your AWS CLI credentials are active, or on the Spark host. The producer now supports both replayed CSV data and a live public API feed.
+
+Replay historical data into Kinesis:
 
 ```bash
 python3 producer/producer.py \
+  --source csv \
   --input data/historical_space_weather.csv \
   --mode kinesis \
   --stream-name solarpulse-stream \
   --region eu-west-1 \
   --rate 5
+```
+
+Stream a live public space-weather source (NOAA aurora snapshot feed) to stdout or Kinesis:
+
+```bash
+python3 producer/producer.py \
+  --source api \
+  --mode stdout \
+  --api-url https://services.swpc.noaa.gov/json/ovation_aurora_latest.json \
+  --api-max-polls 1
+```
+
+If you want to push the live space-weather feed into Kinesis instead, use:
+
+```bash
+python3 producer/producer.py \
+  --source api \
+  --mode kinesis \
+  --stream-name solarpulse-stream \
+  --region eu-west-1 \
+  --api-url https://services.swpc.noaa.gov/json/ovation_aurora_latest.json \
+  --api-max-polls 3 \
+  --poll-interval 5
 ```
 
 ### 6. Run the batch layer against S3

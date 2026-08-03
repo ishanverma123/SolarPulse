@@ -1,7 +1,17 @@
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
 from pyspark.sql import DataFrame
-from pyspark.sql.functions import avg, col, dayofmonth, hour, month, to_timestamp, when, year
+from pyspark.sql import functions as F
+from pyspark.sql.functions import avg, col, dayofmonth, hour, month, to_timestamp, year
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from speed.anomaly import classify, disturbance_score
 
 
 REQUIRED_COLUMNS = (
@@ -42,43 +52,17 @@ def add_time_columns(df: DataFrame) -> DataFrame:
 
 
 def add_disturbance_score(df: DataFrame) -> DataFrame:
-    speed_score = (
-        when(col("speed") >= 700, 5)
-        .when(col("speed") >= 600, 4)
-        .when(col("speed") >= 500, 3)
-        .when(col("speed") >= 450, 2)
-        .otherwise(1)
+    disturbance_udf = F.udf(
+        lambda speed, density, bt: disturbance_score(float(speed), float(density), float(bt)),
+        "int",
     )
-    density_score = (
-        when(col("density") >= 10, 5)
-        .when(col("density") >= 9, 4)
-        .when(col("density") >= 8, 3)
-        .when(col("density") >= 7, 2)
-        .otherwise(1)
+    risk_band_udf = F.udf(lambda score: classify(int(score)), "string")
+
+    enriched = df.withColumn(
+        "disturbance_score",
+        disturbance_udf(col("speed"), col("density"), col("bt")),
     )
-    magnetic_score = (
-        when(col("bt") >= 8, 5)
-        .when(col("bt") >= 7, 4)
-        .when(col("bt") >= 6, 3)
-        .when(col("bt") >= 5, 2)
-        .otherwise(1)
-    )
-    risk_band = (
-        when(col("disturbance_score") >= 13, "extreme")
-        .when(col("disturbance_score") >= 10, "high")
-        .when(col("disturbance_score") >= 7, "elevated")
-        .otherwise("baseline")
-    )
-    enriched = (
-        df.withColumn("speed_score", speed_score)
-        .withColumn("density_score", density_score)
-        .withColumn("magnetic_score", magnetic_score)
-        .withColumn(
-            "disturbance_score",
-            col("speed_score") + col("density_score") + col("magnetic_score"),
-        )
-    )
-    return enriched.withColumn("risk_band", risk_band)
+    return enriched.withColumn("risk_band", risk_band_udf(col("disturbance_score")))
 
 
 def build_summary(df: DataFrame) -> dict:

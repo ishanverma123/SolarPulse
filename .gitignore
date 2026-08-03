@@ -12,3 +12,13 @@ __pycache__/
 # Project outputs
 output/*
 !output/.gitkeep
+
+# macOS
+.DS_Store
+
+# Security
+*.pem
+*.key
+
+# Streamlit machine-specific files
+.streamlit/machine_id_v4

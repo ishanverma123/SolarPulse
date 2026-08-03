@@ -384,8 +384,7 @@ overview_cols[4].metric("Avg Disturbance", summary["avg_disturbance_score"])
 overview_cols[5].metric("P95 Speed", percentiles["p95"])
 
 with st.expander("Batch layer summary JSON", expanded=False):
-    st.json(summary)
-
+        st.json(summary)
 with st.expander("Historical percentiles", expanded=True):
     st.json(percentiles)
 
@@ -445,11 +444,22 @@ with batch_tabs[2]:
     if speed_df is not None and not speed_df.empty:
         latest = speed_df.iloc[-1]
         st.subheader("Serving View (Batch + Speed Merge)")
+        serving_view = {
+            "historical_avg_speed": summary["avg_speed"],
+            "historical_p95_speed": percentiles["p95"],
+            "latest_current_speed": latest["current_speed"],
+            "latest_rolling_avg_speed": latest["rolling_avg_speed"],
+            "latest_disturbance_score": latest["disturbance_score"],
+            "latest_risk_band": latest["risk_band"],
+            "freshness_gap": round(latest["current_speed"] - summary["avg_speed"], 3),
+        }
+        st.json(serving_view)
+
         serve_cols = st.columns(4)
-        serve_cols[0].metric("Current Speed", latest["current_speed"])
-        serve_cols[1].metric("Rolling Avg Speed", latest["rolling_avg_speed"])
-        serve_cols[2].metric("Disturbance Score", latest["disturbance_score"])
-        serve_cols[3].metric("Risk Band", latest["risk_band"])
+        serve_cols[0].metric("Historical Avg Speed", summary["avg_speed"])
+        serve_cols[1].metric("Historical P95 Speed", percentiles["p95"])
+        serve_cols[2].metric("Latest Speed", latest["current_speed"])
+        serve_cols[3].metric("Latest Risk", latest["risk_band"])
 
         st.dataframe(
             speed_df[["time_tag", "current_speed", "rolling_avg_speed", "disturbance_score", "risk_band"]].tail(10),

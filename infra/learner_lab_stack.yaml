@@ -114,19 +114,16 @@ Resources:
           ToPort: 8501
           CidrIp: !Ref AllowedSshCidr
 
-  SparkHost:
-    Type: AWS::EC2::Instance
+  SparkHostLaunchConfiguration:
+    Type: AWS::AutoScaling::LaunchConfiguration
     Properties:
       ImageId: !Sub "{{resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64}}"
       InstanceType: !Ref InstanceType
       IamInstanceProfile: !Ref ExistingInstanceProfileName
       KeyName: !Ref KeyName
-      SecurityGroupIds:
+      SecurityGroups:
         - !Ref SparkHostSecurityGroup
-      SubnetId: !Ref PublicSubnetId
-      Tags:
-        - Key: Name
-          Value: !Sub "${ProjectName}-spark-host"
+      AssociatePublicIpAddress: true
       UserData:
         Fn::Base64: !Sub |
           #!/bin/bash
@@ -155,12 +152,38 @@ Resources:
           chmod +x /opt/solarpulse/start_dashboard.sh
           /opt/solarpulse/start_dashboard.sh
 
+  SparkHostAutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      VPCZoneIdentifier:
+        - !Ref PublicSubnetId
+      LaunchConfigurationName: !Ref SparkHostLaunchConfiguration
+      MinSize: 1
+      MaxSize: 3
+      DesiredCapacity: 1
+      HealthCheckType: EC2
+      HealthCheckGracePeriod: 300
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-spark-host"
+          PropagateAtLaunch: true
+
+  SparkHostScalePolicy:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      AutoScalingGroupName: !Ref SparkHostAutoScalingGroup
+      PolicyType: TargetTrackingScaling
+      TargetTrackingConfiguration:
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ASGAverageCPUUtilization
+        TargetValue: 60.0
+        DisableScaleIn: false
+      Cooldown: 300
+
 Outputs:
   DataBucketName:
     Value: !Ref SolarPulseBucket
   KinesisStreamName:
     Value: !Ref SolarPulseStream
-  SparkHostInstanceId:
-    Value: !Ref SparkHost
-  SparkHostPublicIp:
-    Value: !GetAtt SparkHost.PublicIp
+  SparkHostAutoScalingGroupName:
+    Value: !Ref SparkHostAutoScalingGroup
